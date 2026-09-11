@@ -1,6 +1,8 @@
 """Producto 1 — POS + Dashboard. Punto de entrada."""
 
-import streamlit as st
+import importlib
+
+st = importlib.import_module("streamlit")
 
 from src.gsheets import health_check
 from src.views import employee, owner
@@ -13,8 +15,8 @@ st.set_page_config(
 )
 
 VISTAS = {
-    "🧾 Registrar venta": "empleado",
-    "📊 Dashboard del dueño": "dueno",
+    "🧾 Registro de ventas": "empleado",
+    "📊 Dashboard": "dueno",
 }
 
 
