@@ -13,7 +13,7 @@ from src.gsheets import read_df_live
 
 
 def render() -> None:
-    st.markdown("### 📊 Panel del dueño")
+    st.markdown("### 📊 Panel de datos ")
     if st.button("🔄 Actualizar", use_container_width=False):
         st.rerun()
 

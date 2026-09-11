@@ -17,7 +17,7 @@ def _ahora() -> datetime:
 
 
 def render() -> None:
-    st.markdown("### 🧾 Nueva venta")
+    st.markdown("### 🧾 Pedido nuevo ")
 
     empleados = read_df(SHEET_EMPLEADOS)
     productos = read_df(SHEET_PRODUCTOS)
@@ -25,7 +25,7 @@ def render() -> None:
         st.warning("Faltan datos en las hojas Empleados o Productos.")
         return
 
-    # --- PARCHE DE LIMPIEZA ---
+    # --- LIMPIEZA ---
     # Remueve símbolos de moneda y comas enviados por Google Sheets 
     # para evitar errores matemáticos de conversión.
     productos["precio"] = (
@@ -39,6 +39,7 @@ def render() -> None:
 
     activos = empleados.loc[empleados["activo"].astype(str).str.lower() == "true", "nombre"]
     empleado = st.selectbox("Empleado", activos.tolist(), key="empleado_actual")
+    
 
     carrito: dict[str, int] = st.session_state.setdefault("carrito", {})
     catalogo = productos.loc[productos["activo"].astype(str).str.lower() == "true"]
