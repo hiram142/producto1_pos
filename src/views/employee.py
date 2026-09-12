@@ -132,16 +132,33 @@ def render() -> None:
     carrito: list[dict] = st.session_state.setdefault("carrito", [])
     catalogo = productos.loc[productos["activo"].astype(str).str.strip().str.upper().isin(["TRUE", "1", "SI", "YES"])]
 
-    st.caption("Toca un producto para agregarlo")
-    columnas = st.columns(2)
-    for i, fila in enumerate(catalogo.itertuples()):
-        with columnas[i % 2]:
-            if st.button(f"{fila.producto}\n${float(fila.precio):,.0f}", key=f"btn_{fila.producto}", use_container_width=True):
-                _agregar_al_carrito(carrito, str(fila.producto), float(fila.precio))
-                st.rerun()
+    # --- SALVAVIDAS: Si olvidan agregar la columna 'categoria', la crea en memoria
+    if "categoria" not in catalogo.columns:
+        catalogo["categoria"] = "Platillos"
+
+    # --- PESTAÑAS Y DISEÑO DE BOTONES ---
+    st.caption("Selecciona una categoría:")
+    tabs = st.tabs(["🍔 Platillos", "🥤 Bebidas", "🍰 Postres"])
+    categorias = ["Platillos", "Bebidas", "Postres"]
+
+    for tab, cat in zip(tabs, categorias):
+        with tab:
+            # Filtra el catálogo para mostrar solo lo que corresponde a esta pestaña
+            cat_df = catalogo[catalogo["categoria"].astype(str).str.strip().str.lower() == cat.lower()]
+            
+            if cat_df.empty:
+                st.info(f"No hay {cat.lower()} activos en el menú.")
+            else:
+                # Al quitar las columnas (st.columns), el botón automáticamente ocupa todo el ancho de la pantalla
+                for fila in cat_df.itertuples():
+                    # Los \n\n generan el espacio vertical (volumen) que solicitaste
+                    if st.button(f"{fila.producto}\n\n${float(fila.precio):,.0f}", key=f"btn_{fila.producto}", use_container_width=True):
+                        _agregar_al_carrito(carrito, str(fila.producto), float(fila.precio))
+                        st.rerun()
 
     if not carrito:
-        st.info("Carrito vacío. Selecciona productos del menú.")
+        st.divider()
+        st.info("Carrito vacío. Toca un producto para agregarlo.")
         return
 
     st.divider()
@@ -159,7 +176,6 @@ def render() -> None:
     metodos_pago = ["Efectivo", "Tarjeta", "Transferencia"]
     metodo = st.radio("Método de pago", metodos_pago, horizontal=True, index=None)
 
-    # Nuevo campo de texto para el nombre de la mesa
     nombre_cuenta = st.text_input("🪑 Nombre de la mesa o cliente:", value=st.session_state.get("nombre_cuenta_actual", ""))
 
     col_pausar, col_cobrar = st.columns(2)
