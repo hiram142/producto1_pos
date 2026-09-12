@@ -117,3 +117,10 @@ def delete_open_account(account_id: str) -> bool:
     if target_row is None: return False
     worksheet.delete_rows(target_row)
     return True
+def health_check() -> tuple[bool, str]:
+    """Diagnóstico rápido de conexión para mostrar en el sidebar."""
+    try:
+        titulo = get_client().open_by_key(st.secrets["app"]["spreadsheet_id"]).title
+        return True, titulo
+    except Exception as exc:
+        return False, str(exc)
