@@ -172,15 +172,17 @@ def render() -> None:
         efectivo, tarjeta, transferencia = 0.0, 0.0, total
     else:
         st.caption("Escribe un monto y lo demás se calculará solo:")
-        efectivo_input = st.number_input("Monto en Efectivo ($)", min_value=0.0, value=0.0, step=50.0)
-        efectivo = min(efectivo_input, float(total))
+        
+        # Parámetros en enteros (0 y 50) para evitar que el input pida decimales
+        efectivo_input = st.number_input("Monto en Efectivo ($)", min_value=0, value=0, step=50)
+        efectivo = min(float(efectivo_input), float(total))
         
         if efectivo_input > total:
-            st.info(f"🪙 Cambio a entregar: **${efectivo_input - total:,.2f}**")
+            st.info(f"🪙 Cambio a entregar: **${efectivo_input - total:,.0f}**")
             
         resto1 = round(total - efectivo, 2)
-        tarjeta_input = st.number_input("Monto en Tarjeta ($)", min_value=0.0, value=float(resto1), step=50.0)
-        tarjeta = min(tarjeta_input, resto1)
+        tarjeta_input = st.number_input("Monto en Tarjeta ($)", min_value=0, value=int(resto1), step=50)
+        tarjeta = min(float(tarjeta_input), resto1)
         
         transferencia = round(resto1 - tarjeta, 2)
         if transferencia > 0:
