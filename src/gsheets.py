@@ -65,28 +65,27 @@ import hashlib
 import pandas as pd
 import json
 import uuid
-
 # ============================================================
 # AUTENTICACIÓN DE EMPLEADOS (Versión Simplificada)
 # ============================================================
-def get_employees(conn) -> pd.DataFrame:
-    worksheet = conn.worksheet("Empleados")
+def get_employees() -> pd.DataFrame:
+    worksheet = get_worksheet("Empleados")
     records = worksheet.get_all_records()
     if not records:
         return pd.DataFrame(columns=["id", "nombre", "pin", "activo"])
     return pd.DataFrame(records)
 
-def get_active_employees(conn) -> pd.DataFrame:
-    employees = get_employees(conn)
+def get_active_employees() -> pd.DataFrame:
+    employees = get_employees()
     if employees.empty:
         return employees
     active_mask = employees["activo"].astype(str).str.strip().str.upper().isin({"TRUE", "1", "SI", "SÍ", "YES"})
     return employees.loc[active_mask].copy()
 
-def validate_employee_pin(conn, employee_name: str, pin: str) -> bool:
+def validate_employee_pin(employee_name: str, pin: str) -> bool:
     if not pin:
         return False
-    employees = get_active_employees(conn)
+    employees = get_active_employees()
     employee = employees[employees["nombre"].astype(str) == str(employee_name)]
     if employee.empty:
         return False
@@ -104,8 +103,8 @@ def deserialize_cart(carrito_json: str) -> list:
     if not carrito_json: return []
     return json.loads(carrito_json)
 
-def get_open_accounts(conn, employee: str = None) -> pd.DataFrame:
-    worksheet = conn.worksheet("Cuentas_Abiertas")
+def get_open_accounts(employee: str = None) -> pd.DataFrame:
+    worksheet = get_worksheet("Cuentas_Abiertas")
     records = worksheet.get_all_records()
     if not records:
         return pd.DataFrame(columns=["id_cuenta", "empleado", "carrito_json"])
@@ -114,15 +113,15 @@ def get_open_accounts(conn, employee: str = None) -> pd.DataFrame:
         accounts = accounts[accounts["empleado"].astype(str) == str(employee)].copy()
     return accounts
 
-def create_open_account(conn, employee: str, cart: list) -> str:
-    worksheet = conn.worksheet("Cuentas_Abiertas")
+def create_open_account(employee: str, cart: list) -> str:
+    worksheet = get_worksheet("Cuentas_Abiertas")
     account_id = str(uuid.uuid4())
     cart_json = serialize_cart(cart)
     worksheet.append_row([account_id, employee, cart_json], value_input_option="RAW")
     return account_id
 
-def update_open_account(conn, account_id: str, cart: list) -> bool:
-    worksheet = conn.worksheet("Cuentas_Abiertas")
+def update_open_account(account_id: str, cart: list) -> bool:
+    worksheet = get_worksheet("Cuentas_Abiertas")
     all_values = worksheet.get_all_values()
     if len(all_values) <= 1: return False
     
@@ -140,8 +139,8 @@ def update_open_account(conn, account_id: str, cart: list) -> bool:
     worksheet.update_cell(target_row, cart_column + 1, serialize_cart(cart))
     return True
 
-def delete_open_account(conn, account_id: str) -> bool:
-    worksheet = conn.worksheet("Cuentas_Abiertas")
+def delete_open_account(account_id: str) -> bool:
+    worksheet = get_worksheet("Cuentas_Abiertas")
     all_values = worksheet.get_all_values()
     if len(all_values) <= 1: return False
     

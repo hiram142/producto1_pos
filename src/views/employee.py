@@ -15,7 +15,6 @@ from src.gsheets import (
 )
 
 def _ahora() -> datetime:
-    # Fuerza la hora local de México central para los tickets de venta
     return datetime.now(ZoneInfo("America/Mexico_City"))
 
 def _agregar_al_carrito(carrito: list[dict], producto: str, precio_unitario: float) -> None:
@@ -36,10 +35,9 @@ def _quitar_del_carrito(carrito: list[dict], producto: str) -> None:
 def _total_carrito(carrito: list[dict]) -> float:
     return sum(linea["cantidad"] * linea["precio_unitario"] for linea in carrito)
 
-def _pantalla_bloqueo(empleados_df, conn) -> None:
+def _pantalla_bloqueo(empleados_df) -> None:
     st.markdown("### 🔒 ¿Quién eres?")
     
-    # Filtra empleados activos
     activos = empleados_df.loc[empleados_df["activo"].astype(str).str.strip().str.upper().isin(["TRUE", "1", "SI", "YES"])]
     seleccionado = st.session_state.get("empleado_seleccionado")
 
@@ -63,14 +61,14 @@ def _pantalla_bloqueo(empleados_df, conn) -> None:
         entrar = st.form_submit_button("Entrar", type="primary", use_container_width=True)
 
     if entrar:
-        if validate_employee_pin(conn, seleccionado, pin_ingresado):
+        if validate_employee_pin(seleccionado, pin_ingresado):
             st.session_state["empleado_actual"] = seleccionado
             st.session_state.pop("empleado_seleccionado", None)
             st.rerun()
         else:
             st.error("PIN incorrecto.")
 
-def _panel_cuentas_abiertas(empleado: str, conn) -> None:
+def _panel_cuentas_abiertas(empleado: str) -> None:
     with st.sidebar:
         st.markdown(f"#### 👤 {empleado}")
         if st.button("🔒 Cerrar sesión", use_container_width=True):
@@ -82,7 +80,7 @@ def _panel_cuentas_abiertas(empleado: str, conn) -> None:
         st.divider()
         st.markdown("#### ⏸️ Tus cuentas pendientes")
 
-        cuentas_df = get_open_accounts(conn, empleado)
+        cuentas_df = get_open_accounts(empleado)
 
         if cuentas_df.empty:
             st.caption("No tienes cuentas en pausa.")
@@ -102,27 +100,26 @@ def _panel_cuentas_abiertas(empleado: str, conn) -> None:
                     st.session_state["cuenta_actual_id"] = cuenta_id
                     st.rerun()
 
-def render(conn) -> None:
-    empleados = read_df(conn, "Empleados")
-    productos = read_df(conn, "Productos")
+def render() -> None:
+    empleados = read_df("Empleados")
+    productos = read_df("Productos")
 
     if empleados.empty or productos.empty:
         st.warning("Faltan datos en las hojas Empleados o Productos.")
         return
 
     if not st.session_state.get("empleado_actual"):
-        _pantalla_bloqueo(empleados, conn)
+        _pantalla_bloqueo(empleados)
         return
 
     empleado = st.session_state["empleado_actual"]
-    _panel_cuentas_abiertas(empleado, conn)
+    _panel_cuentas_abiertas(empleado)
 
     if st.session_state.get("mensaje_flash"):
         st.success(st.session_state.pop("mensaje_flash"))
 
     st.markdown("### 🧾 Pedido nuevo")
     
-    # Limpieza de precios para cálculos
     productos["precio"] = productos["precio"].astype(str).str.replace("$", "", regex=False).str.replace(",", "", regex=False).astype(float)
 
     carrito: list[dict] = st.session_state.setdefault("carrito", [])
@@ -163,9 +160,9 @@ def render(conn) -> None:
         cuenta_id = st.session_state.get("cuenta_actual_id")
         try:
             if cuenta_id:
-                update_open_account(conn, cuenta_id, list(carrito))
+                update_open_account(cuenta_id, list(carrito))
             else:
-                create_open_account(conn, empleado, list(carrito))
+                create_open_account(empleado, list(carrito))
         except Exception as exc:
             st.error("No se pudo pausar el pedido.")
             st.code(str(exc), language="text")
@@ -180,7 +177,6 @@ def render(conn) -> None:
         ts = _ahora()
         id_venta = f"V-{ts:%Y%m%d%H%M%S}-{uuid.uuid4().hex[:4]}"
         
-        # Estructura exacta de la hoja de Ventas
         filas = [
             [
                 id_venta, ts.isoformat(timespec="seconds"), ts.strftime("%Y-%m-%d"),
@@ -191,7 +187,7 @@ def render(conn) -> None:
         ]
 
         try:
-            append_rows(conn, "Ventas", filas)
+            append_rows("Ventas", filas)
         except Exception as exc:
             st.error("Error de conexión al registrar la venta.")
             st.code(str(exc), language="text")
@@ -199,7 +195,7 @@ def render(conn) -> None:
 
         cuenta_id = st.session_state.get("cuenta_actual_id")
         if cuenta_id:
-            delete_open_account(conn, cuenta_id)
+            delete_open_account(cuenta_id)
 
         st.session_state["carrito"] = []
         st.session_state.pop("cuenta_actual_id", None)
