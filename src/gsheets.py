@@ -135,3 +135,20 @@ def health_check() -> tuple[bool, str]:
         return True, titulo
     except Exception as exc:
         return False, str(exc)
+
+def get_sales_for_report() -> pd.DataFrame:
+
+    worksheet = get_worksheet(SHEET_SALES)
+    
+    headers = worksheet.row_values(1)
+    if headers != VENTAS_COLUMNS:
+        raise ValueError(
+            "La hoja Ventas debe tener las 12 columnas "
+            "esperadas, en el orden definido."
+        )
+
+    records = worksheet.get_all_records(
+        numericise_ignore=["all"],
+    )
+
+    return pd.DataFrame(records, columns=VENTAS_COLUMNS)
