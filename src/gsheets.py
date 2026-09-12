@@ -62,43 +62,98 @@ def health_check() -> tuple[bool, str]:
         return False, str(exc)
     
 import hashlib
+import pandas as pd
 import json
 import uuid
-from typing import Any
-
-import pandas as pd
-
 
 # ============================================================
 # AUTENTICACIÓN DE EMPLEADOS (Versión Simplificada)
 # ============================================================
-def get_employees(spreadsheet) -> pd.DataFrame:
-    worksheet = spreadsheet.worksheet("Empleados")
+def get_employees(conn) -> pd.DataFrame:
+    worksheet = conn.worksheet("Empleados")
     records = worksheet.get_all_records()
     if not records:
         return pd.DataFrame(columns=["id", "nombre", "pin", "activo"])
     return pd.DataFrame(records)
 
-def get_active_employees(spreadsheet) -> pd.DataFrame:
-    employees = get_employees(spreadsheet)
+def get_active_employees(conn) -> pd.DataFrame:
+    employees = get_employees(conn)
     if employees.empty:
         return employees
-
     active_mask = employees["activo"].astype(str).str.strip().str.upper().isin({"TRUE", "1", "SI", "SÍ", "YES"})
     return employees.loc[active_mask].copy()
 
-def validate_employee_pin(spreadsheet, employee_name: str, pin: str) -> bool:
+def validate_employee_pin(conn, employee_name: str, pin: str) -> bool:
     if not pin:
         return False
-    
-    employees = get_active_employees(spreadsheet)
+    employees = get_active_employees(conn)
     employee = employees[employees["nombre"].astype(str) == str(employee_name)]
-    
     if employee.empty:
         return False
-    
-    # Leemos el PIN de Sheets, quitamos decimales por si Google lo manda como 1234.0, y comparamos
     stored_pin = str(employee.iloc[0]["pin"]).replace(".0", "").strip()
     provided_pin = str(pin).strip()
-    
     return provided_pin == stored_pin
+
+# ============================================================
+# CUENTAS ABIERTAS
+# ============================================================
+def serialize_cart(cart: list) -> str:
+    return json.dumps(cart, ensure_ascii=False, separators=(",", ":"))
+
+def deserialize_cart(carrito_json: str) -> list:
+    if not carrito_json: return []
+    return json.loads(carrito_json)
+
+def get_open_accounts(conn, employee: str = None) -> pd.DataFrame:
+    worksheet = conn.worksheet("Cuentas_Abiertas")
+    records = worksheet.get_all_records()
+    if not records:
+        return pd.DataFrame(columns=["id_cuenta", "empleado", "carrito_json"])
+    accounts = pd.DataFrame(records)
+    if employee is not None:
+        accounts = accounts[accounts["empleado"].astype(str) == str(employee)].copy()
+    return accounts
+
+def create_open_account(conn, employee: str, cart: list) -> str:
+    worksheet = conn.worksheet("Cuentas_Abiertas")
+    account_id = str(uuid.uuid4())
+    cart_json = serialize_cart(cart)
+    worksheet.append_row([account_id, employee, cart_json], value_input_option="RAW")
+    return account_id
+
+def update_open_account(conn, account_id: str, cart: list) -> bool:
+    worksheet = conn.worksheet("Cuentas_Abiertas")
+    all_values = worksheet.get_all_values()
+    if len(all_values) <= 1: return False
+    
+    headers = all_values[0]
+    id_column = headers.index("id_cuenta")
+    cart_column = headers.index("carrito_json")
+    
+    target_row = None
+    for row_number, row in enumerate(all_values[1:], start=2):
+        if len(row) > id_column and row[id_column] == account_id:
+            target_row = row_number
+            break
+            
+    if target_row is None: return False
+    worksheet.update_cell(target_row, cart_column + 1, serialize_cart(cart))
+    return True
+
+def delete_open_account(conn, account_id: str) -> bool:
+    worksheet = conn.worksheet("Cuentas_Abiertas")
+    all_values = worksheet.get_all_values()
+    if len(all_values) <= 1: return False
+    
+    headers = all_values[0]
+    id_column = headers.index("id_cuenta")
+    
+    target_row = None
+    for row_number, row in enumerate(all_values[1:], start=2):
+        if len(row) > id_column and row[id_column] == account_id:
+            target_row = row_number
+            break
+            
+    if target_row is None: return False
+    worksheet.delete_rows(target_row)
+    return True
