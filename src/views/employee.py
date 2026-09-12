@@ -264,4 +264,3 @@ def render() -> None:
         st.session_state["carrito"] = []
         st.session_state.pop("cuenta_actual_id", None)
         _reset_ticket()
-        
