@@ -88,5 +88,5 @@ def render() -> None:
             st.info("No hay datos suficientes para generar el reporte.")
             
     except Exception as exc:
-        st.error("No se pudo generar el reporte contable.")
+        st.error("Falta crear el archivo src/reportes.py o actualizar gsheets.py con la función de reporte.")
         st.code(str(exc), language="text")
