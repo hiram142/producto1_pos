@@ -17,8 +17,7 @@ st.set_page_config(
 VISTAS = {
     "🧾 Registro de ventas": "empleado",
     "📊 Dashboard": "dueno",
-}
-
+    }
 
 def _sidebar() -> str:
     with st.sidebar:

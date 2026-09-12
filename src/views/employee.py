@@ -1,102 +1,209 @@
-"""Vista de venta, optimizada para pantalla de teléfono."""
-
-from __future__ import annotations
-
 import uuid
+import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
 import streamlit as st
 
-from src.config import COLUMNAS_VENTAS, METODOS_PAGO, SHEET_EMPLEADOS, SHEET_PRODUCTOS, SHEET_VENTAS
-from src.gsheets import append_rows, read_df
-
+from src.gsheets import (
+    append_rows,
+    create_open_account,
+    delete_open_account,
+    get_open_accounts,
+    read_df,
+    update_open_account,
+    validate_employee_pin,
+)
 
 def _ahora() -> datetime:
-    return datetime.now(ZoneInfo(st.secrets["app"].get("timezone", "UTC")))
+    # Fuerza la hora local de México central para los tickets de venta
+    return datetime.now(ZoneInfo("America/Mexico_City"))
 
+def _agregar_al_carrito(carrito: list[dict], producto: str, precio_unitario: float) -> None:
+    for linea in carrito:
+        if linea["producto"] == producto:
+            linea["cantidad"] += 1
+            return
+    carrito.append({"producto": producto, "cantidad": 1, "precio_unitario": precio_unitario})
 
-def render() -> None:
-    st.markdown("### 🧾 Pedido nuevo ")
+def _quitar_del_carrito(carrito: list[dict], producto: str) -> None:
+    for linea in list(carrito):
+        if linea["producto"] == producto:
+            linea["cantidad"] -= 1
+            if linea["cantidad"] <= 0:
+                carrito.remove(linea)
+            return
 
-    empleados = read_df(SHEET_EMPLEADOS)
-    productos = read_df(SHEET_PRODUCTOS)
+def _total_carrito(carrito: list[dict]) -> float:
+    return sum(linea["cantidad"] * linea["precio_unitario"] for linea in carrito)
+
+def _pantalla_bloqueo(empleados_df, conn) -> None:
+    st.markdown("### 🔒 ¿Quién eres?")
+    
+    # Filtra empleados activos
+    activos = empleados_df.loc[empleados_df["activo"].astype(str).str.strip().str.upper().isin(["TRUE", "1", "SI", "YES"])]
+    seleccionado = st.session_state.get("empleado_seleccionado")
+
+    if not seleccionado:
+        st.caption("Toca tu nombre para continuar")
+        columnas = st.columns(2)
+        for i, nombre in enumerate(activos["nombre"].astype(str).tolist()):
+            with columnas[i % 2]:
+                if st.button(nombre, key=f"sel_emp_{nombre}", use_container_width=True):
+                    st.session_state["empleado_seleccionado"] = nombre
+                    st.rerun()
+        return
+
+    st.write(f"👤 **{seleccionado}**")
+    if st.button("‹ No soy yo", use_container_width=False):
+        st.session_state.pop("empleado_seleccionado", None)
+        st.rerun()
+
+    with st.form("form_pin", clear_on_submit=True):
+        pin_ingresado = st.text_input("PIN", type="password", max_chars=4)
+        entrar = st.form_submit_button("Entrar", type="primary", use_container_width=True)
+
+    if entrar:
+        if validate_employee_pin(conn, seleccionado, pin_ingresado):
+            st.session_state["empleado_actual"] = seleccionado
+            st.session_state.pop("empleado_seleccionado", None)
+            st.rerun()
+        else:
+            st.error("PIN incorrecto.")
+
+def _panel_cuentas_abiertas(empleado: str, conn) -> None:
+    with st.sidebar:
+        st.markdown(f"#### 👤 {empleado}")
+        if st.button("🔒 Cerrar sesión", use_container_width=True):
+            st.session_state.pop("empleado_actual", None)
+            st.session_state["carrito"] = []
+            st.session_state.pop("cuenta_actual_id", None)
+            st.rerun()
+
+        st.divider()
+        st.markdown("#### ⏸️ Tus cuentas pendientes")
+
+        cuentas_df = get_open_accounts(conn, empleado)
+
+        if cuentas_df.empty:
+            st.caption("No tienes cuentas en pausa.")
+            return
+
+        for _, cuenta in cuentas_df.iterrows():
+            cuenta_id = cuenta["id_cuenta"]
+            carrito_guardado = json.loads(cuenta["carrito_json"])
+            
+            with st.container(border=True):
+                st.write(f"**Orden: {cuenta_id[:6].upper()}**")
+                n_items = sum(linea.get("cantidad", 0) for linea in carrito_guardado)
+                st.caption(f"{n_items} artículos pendientes")
+                
+                if st.button("▶️ Retomar Pedido", key=f"retomar_{cuenta_id}", use_container_width=True):
+                    st.session_state["carrito"] = list(carrito_guardado)
+                    st.session_state["cuenta_actual_id"] = cuenta_id
+                    st.rerun()
+
+def render(conn) -> None:
+    empleados = read_df(conn, "Empleados")
+    productos = read_df(conn, "Productos")
+
     if empleados.empty or productos.empty:
         st.warning("Faltan datos en las hojas Empleados o Productos.")
         return
 
-    # --- LIMPIEZA ---
-    # Remueve símbolos de moneda y comas enviados por Google Sheets 
-    # para evitar errores matemáticos de conversión.
-    productos["precio"] = (
-        productos["precio"]
-        .astype(str)
-        .str.replace("$", "", regex=False)
-        .str.replace(",", "", regex=False)
-        .astype(float)
-    )
-    # --------------------------
+    if not st.session_state.get("empleado_actual"):
+        _pantalla_bloqueo(empleados, conn)
+        return
 
-    activos = empleados.loc[empleados["activo"].astype(str).str.lower() == "true", "nombre"]
-    empleado = st.selectbox("Empleado", activos.tolist(), key="empleado_actual")
+    empleado = st.session_state["empleado_actual"]
+    _panel_cuentas_abiertas(empleado, conn)
+
+    if st.session_state.get("mensaje_flash"):
+        st.success(st.session_state.pop("mensaje_flash"))
+
+    st.markdown("### 🧾 Pedido nuevo")
     
+    # Limpieza de precios para cálculos
+    productos["precio"] = productos["precio"].astype(str).str.replace("$", "", regex=False).str.replace(",", "", regex=False).astype(float)
 
-    carrito: dict[str, int] = st.session_state.setdefault("carrito", {})
-    catalogo = productos.loc[productos["activo"].astype(str).str.lower() == "true"]
+    carrito: list[dict] = st.session_state.setdefault("carrito", [])
+    catalogo = productos.loc[productos["activo"].astype(str).str.strip().str.upper().isin(["TRUE", "1", "SI", "YES"])]
 
     st.caption("Toca un producto para agregarlo")
     columnas = st.columns(2)
     for i, fila in enumerate(catalogo.itertuples()):
         with columnas[i % 2]:
-            if st.button(
-                f"{fila.producto}\n${float(fila.precio):,.0f}",
-                key=f"btn_{fila.producto}",
-                use_container_width=True,
-            ):
-                carrito[fila.producto] = carrito.get(fila.producto, 0) + 1
+            if st.button(f"{fila.producto}\n${float(fila.precio):,.0f}", key=f"btn_{fila.producto}", use_container_width=True):
+                _agregar_al_carrito(carrito, str(fila.producto), float(fila.precio))
                 st.rerun()
 
     if not carrito:
-        st.info("Carrito vacío.")
+        st.info("Carrito vacío. Selecciona productos del menú.")
         return
 
     st.divider()
-    precios = catalogo.set_index("producto")["precio"].astype(float).to_dict()
-    total = 0.0
-    for producto, cantidad in list(carrito.items()):
-        subtotal = precios[producto] * cantidad
-        total += subtotal
+    total = _total_carrito(carrito)
+    for linea in list(carrito):
+        subtotal = linea["cantidad"] * linea["precio_unitario"]
         col_a, col_b = st.columns([4, 1])
-        col_a.write(f"**{cantidad} ×** {producto} — ${subtotal:,.2f}")
-        if col_b.button("➖", key=f"quitar_{producto}", use_container_width=True):
-            carrito[producto] -= 1
-            if carrito[producto] <= 0:
-                del carrito[producto]
+        col_a.write(f"**{linea['cantidad']} ×** {linea['producto']} — ${subtotal:,.2f}")
+        if col_b.button("➖", key=f"quitar_{linea['producto']}", use_container_width=True):
+            _quitar_del_carrito(carrito, linea["producto"])
             st.rerun()
 
     st.metric("Total a cobrar", f"${total:,.2f}")
-    metodo = st.radio("Método de pago", METODOS_PAGO, horizontal=True, index=None)
 
-    if st.button("✅ Registrar venta", type="primary", use_container_width=True, disabled=not metodo):
-        ts = _ahora()
-        id_venta = f"V-{ts:%Y%m%d%H%M%S}-{uuid.uuid4().hex[:4]}"
-        filas = [
-            [
-                id_venta, ts.isoformat(timespec="seconds"), ts.strftime("%Y-%m-%d"),
-                empleado, producto, cantidad, precios[producto],
-                round(precios[producto] * cantidad, 2), metodo,
-            ]
-            for producto, cantidad in carrito.items()
-        ]
-        assert all(len(f) == len(COLUMNAS_VENTAS) for f in filas)
+    metodos_pago = ["Efectivo", "Tarjeta", "Transferencia"]
+    metodo = st.radio("Método de pago", metodos_pago, horizontal=True, index=None)
 
+    col_pausar, col_cobrar = st.columns(2)
+    pausar = col_pausar.button("📥 Pausar", use_container_width=True)
+    cobrar = col_cobrar.button("💵 Cobrar y Cerrar", type="primary", use_container_width=True, disabled=not metodo)
+
+    if pausar:
+        cuenta_id = st.session_state.get("cuenta_actual_id")
         try:
-            append_rows(SHEET_VENTAS, filas)
-        except Exception as exc:  # noqa: BLE001
-            st.error("No se pudo registrar la venta. No cierres la pantalla.")
+            if cuenta_id:
+                update_open_account(conn, cuenta_id, list(carrito))
+            else:
+                create_open_account(conn, empleado, list(carrito))
+        except Exception as exc:
+            st.error("No se pudo pausar el pedido.")
             st.code(str(exc), language="text")
             return
 
-        st.session_state["carrito"] = {}
-        st.success(f"Venta {id_venta} registrada · ${total:,.2f} en {metodo}", icon="✅")
+        st.session_state["carrito"] = []
+        st.session_state.pop("cuenta_actual_id", None)
+        st.session_state["mensaje_flash"] = "Pedido guardado en tus cuentas pendientes."
+        st.rerun()
+
+    if cobrar:
+        ts = _ahora()
+        id_venta = f"V-{ts:%Y%m%d%H%M%S}-{uuid.uuid4().hex[:4]}"
+        
+        # Estructura exacta de la hoja de Ventas
+        filas = [
+            [
+                id_venta, ts.isoformat(timespec="seconds"), ts.strftime("%Y-%m-%d"),
+                empleado, linea["producto"], linea["cantidad"], linea["precio_unitario"],
+                round(linea["cantidad"] * linea["precio_unitario"], 2), metodo
+            ]
+            for linea in carrito
+        ]
+
+        try:
+            append_rows(conn, "Ventas", filas)
+        except Exception as exc:
+            st.error("Error de conexión al registrar la venta.")
+            st.code(str(exc), language="text")
+            return
+
+        cuenta_id = st.session_state.get("cuenta_actual_id")
+        if cuenta_id:
+            delete_open_account(conn, cuenta_id)
+
+        st.session_state["carrito"] = []
+        st.session_state.pop("cuenta_actual_id", None)
+        read_df.clear()
+        
+        st.success(f"Venta registrada exitosamente · ${total:,.2f} pagado con {metodo}", icon="✅")
         st.balloons()

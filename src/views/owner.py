@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+import importlib
+import importlib as st
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-import streamlit as st
+st = importlib.import_module("streamlit")
 
 from src.config import SHEET_VENTAS
 from src.gsheets import read_df_live
