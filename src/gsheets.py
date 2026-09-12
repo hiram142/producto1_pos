@@ -1,11 +1,9 @@
 """Acceso a Google Sheets. Único módulo que conoce la persistencia."""
 
 from __future__ import annotations
-
 import json
 import uuid
 from typing import Any
-
 import gspread
 import pandas as pd
 import streamlit as st
@@ -21,15 +19,20 @@ SHEET_PRODUCTS = "Productos"
 SHEET_EMPLOYEES = "Empleados"
 SHEET_SALES = "Ventas"
 SHEET_OPEN_ACCOUNTS = "Cuentas_Abiertas"
+SHEET_CASH_CLOSINGS = "Cierres_Caja"
 
 VENTAS_COLUMNS = [
     "id_venta", "fecha", "empleado", "producto", "cantidad", 
     "precio_unitario", "subtotal", "metodo_pago", "monto_efectivo", 
-    "monto_tarjeta", "monto_transferencia"
+    "monto_tarjeta", "monto_transferencia", "telefono_cliente"
 ]
 
 EMPLEADOS_COLUMNS = ["id", "nombre", "pin", "activo"]
 CUENTAS_ABIERTAS_COLUMNS = ["id_cuenta", "nombre_cuenta", "empleado", "carrito_json"]
+CIERRES_CAJA_COLUMNS = [
+    "id_cierre", "empleado", "inicio_turno", "efectivo_inicial", "fin_turno", 
+    "efectivo_reportado", "efectivo_esperado", "diferencia"
+]
 
 @st.cache_resource(show_spinner=False)
 def get_client() -> gspread.Client:
@@ -117,8 +120,16 @@ def delete_open_account(account_id: str) -> bool:
     if target_row is None: return False
     worksheet.delete_rows(target_row)
     return True
+
+def create_cash_closing(empleado: str, inicio_turno: str, efectivo_inicial: float, efectivo_reportado: float, efectivo_esperado: float, fin_turno: str) -> str:
+    id_cierre = str(uuid.uuid4())
+    diferencia = round(float(efectivo_reportado) - float(efectivo_esperado), 2)
+    row = [id_cierre, empleado, inicio_turno, round(float(efectivo_inicial), 2), fin_turno, round(float(efectivo_reportado), 2), round(float(efectivo_esperado), 2), diferencia]
+    append_rows(SHEET_CASH_CLOSINGS, [row])
+    return id_cierre
+
 def health_check() -> tuple[bool, str]:
-    """Diagnóstico rápido de conexión para mostrar en el sidebar."""
+    """Diagnóstico rápido de conexión."""
     try:
         titulo = get_client().open_by_key(st.secrets["app"]["spreadsheet_id"]).title
         return True, titulo
