@@ -94,7 +94,7 @@ def validate_employee_pin(employee_name: str, pin: str) -> bool:
     return provided_pin == stored_pin
 
 # ============================================================
-# CUENTAS ABIERTAS
+# CUENTAS ABIERTAS (Blindadas y dinámicas)
 # ============================================================
 def serialize_cart(cart: list) -> str:
     return json.dumps(cart, ensure_ascii=False, separators=(",", ":"))
@@ -108,16 +108,35 @@ def get_open_accounts(employee: str = None) -> pd.DataFrame:
     records = worksheet.get_all_records()
     if not records:
         return pd.DataFrame(columns=["id_cuenta", "empleado", "carrito_json"])
+    
     accounts = pd.DataFrame(records)
-    if employee is not None:
-        accounts = accounts[accounts["empleado"].astype(str) == str(employee)].copy()
+    # Limpiamos los títulos de las columnas por si tienen espacios extra en Sheets
+    accounts.columns = [str(c).strip().lower() for c in accounts.columns]
+    
+    if employee is not None and "empleado" in accounts.columns:
+        # Buscamos asegurando que no haya espacios invisibles que rompan la búsqueda
+        accounts = accounts[accounts["empleado"].astype(str).str.strip() == str(employee).strip()].copy()
     return accounts
 
 def create_open_account(employee: str, cart: list) -> str:
     worksheet = get_worksheet("Cuentas_Abiertas")
     account_id = str(uuid.uuid4())
     cart_json = serialize_cart(cart)
-    worksheet.append_row([account_id, employee, cart_json], value_input_option="RAW")
+    
+    # Leemos tus columnas en tiempo real y mapeamos los datos al lugar exacto
+    headers = [str(h).strip().lower() for h in worksheet.row_values(1)]
+    row_data = [""] * len(headers)
+    
+    for i, h in enumerate(headers):
+        if h == "id_cuenta": row_data[i] = account_id
+        elif h == "empleado": row_data[i] = employee
+        elif h == "carrito_json": row_data[i] = cart_json
+        elif h == "nombre_cuenta": row_data[i] = "Pedido en caja"
+        
+    if len(headers) == 0:
+        row_data = [account_id, employee, cart_json]
+        
+    worksheet.append_row(row_data, value_input_option="RAW")
     return account_id
 
 def update_open_account(account_id: str, cart: list) -> bool:
@@ -125,13 +144,15 @@ def update_open_account(account_id: str, cart: list) -> bool:
     all_values = worksheet.get_all_values()
     if len(all_values) <= 1: return False
     
-    headers = all_values[0]
+    headers = [str(h).strip().lower() for h in all_values[0]]
+    if "id_cuenta" not in headers or "carrito_json" not in headers: return False
+        
     id_column = headers.index("id_cuenta")
     cart_column = headers.index("carrito_json")
     
     target_row = None
     for row_number, row in enumerate(all_values[1:], start=2):
-        if len(row) > id_column and row[id_column] == account_id:
+        if len(row) > id_column and str(row[id_column]).strip() == str(account_id).strip():
             target_row = row_number
             break
             
@@ -144,12 +165,14 @@ def delete_open_account(account_id: str) -> bool:
     all_values = worksheet.get_all_values()
     if len(all_values) <= 1: return False
     
-    headers = all_values[0]
+    headers = [str(h).strip().lower() for h in all_values[0]]
+    if "id_cuenta" not in headers: return False
+    
     id_column = headers.index("id_cuenta")
     
     target_row = None
     for row_number, row in enumerate(all_values[1:], start=2):
-        if len(row) > id_column and row[id_column] == account_id:
+        if len(row) > id_column and str(row[id_column]).strip() == str(account_id).strip():
             target_row = row_number
             break
             
