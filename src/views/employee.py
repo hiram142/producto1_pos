@@ -75,6 +75,7 @@ def _panel_cuentas_abiertas(empleado: str) -> None:
             st.session_state.pop("empleado_actual", None)
             st.session_state["carrito"] = []
             st.session_state.pop("cuenta_actual_id", None)
+            st.session_state.pop("nombre_cuenta_actual", None)
             st.rerun()
 
         st.divider()
@@ -87,17 +88,23 @@ def _panel_cuentas_abiertas(empleado: str) -> None:
             return
 
         for _, cuenta in cuentas_df.iterrows():
-            cuenta_id = cuenta["id_cuenta"]
-            carrito_guardado = json.loads(cuenta["carrito_json"])
+            cuenta_id = cuenta.get("id_cuenta", "")
+            nombre_mesa = cuenta.get("nombre_cuenta", "Sin nombre")
+            
+            try:
+                carrito_guardado = json.loads(cuenta.get("carrito_json", "[]"))
+            except json.JSONDecodeError:
+                carrito_guardado = []
             
             with st.container(border=True):
-                st.write(f"**Orden: {cuenta_id[:6].upper()}**")
+                st.write(f"**{nombre_mesa}**")
                 n_items = sum(linea.get("cantidad", 0) for linea in carrito_guardado)
                 st.caption(f"{n_items} artículos pendientes")
                 
-                if st.button("▶️ Retomar Pedido", key=f"retomar_{cuenta_id}", use_container_width=True):
+                if st.button("▶️ Retomar", key=f"retomar_{cuenta_id}", use_container_width=True):
                     st.session_state["carrito"] = list(carrito_guardado)
                     st.session_state["cuenta_actual_id"] = cuenta_id
+                    st.session_state["nombre_cuenta_actual"] = str(nombre_mesa)
                     st.rerun()
 
 def render() -> None:
@@ -152,17 +159,24 @@ def render() -> None:
     metodos_pago = ["Efectivo", "Tarjeta", "Transferencia"]
     metodo = st.radio("Método de pago", metodos_pago, horizontal=True, index=None)
 
+    # Nuevo campo de texto para el nombre de la mesa
+    nombre_cuenta = st.text_input("🪑 Nombre de la mesa o cliente:", value=st.session_state.get("nombre_cuenta_actual", ""))
+
     col_pausar, col_cobrar = st.columns(2)
     pausar = col_pausar.button("📥 Pausar", use_container_width=True)
     cobrar = col_cobrar.button("💵 Cobrar y Cerrar", type="primary", use_container_width=True, disabled=not metodo)
 
     if pausar:
+        if not nombre_cuenta.strip():
+            st.warning("⚠️ Escribe un nombre para identificar la mesa antes de pausarla.")
+            return
+
         cuenta_id = st.session_state.get("cuenta_actual_id")
         try:
             if cuenta_id:
                 update_open_account(cuenta_id, list(carrito))
             else:
-                create_open_account(empleado, list(carrito))
+                create_open_account(empleado, list(carrito), nombre_cuenta)
         except Exception as exc:
             st.error("No se pudo pausar el pedido.")
             st.code(str(exc), language="text")
@@ -170,7 +184,8 @@ def render() -> None:
 
         st.session_state["carrito"] = []
         st.session_state.pop("cuenta_actual_id", None)
-        st.session_state["mensaje_flash"] = "Pedido guardado en tus cuentas pendientes."
+        st.session_state.pop("nombre_cuenta_actual", None)
+        st.session_state["mensaje_flash"] = f"Pedido '{nombre_cuenta}' guardado."
         st.rerun()
 
     if cobrar:
@@ -199,6 +214,7 @@ def render() -> None:
 
         st.session_state["carrito"] = []
         st.session_state.pop("cuenta_actual_id", None)
+        st.session_state.pop("nombre_cuenta_actual", None)
         read_df.clear()
         
         st.success(f"Venta registrada exitosamente · ${total:,.2f} pagado con {metodo}", icon="✅")

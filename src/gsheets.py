@@ -65,6 +65,7 @@ import hashlib
 import pandas as pd
 import json
 import uuid
+
 # ============================================================
 # AUTENTICACIÓN DE EMPLEADOS (Versión Simplificada)
 # ============================================================
@@ -110,20 +111,17 @@ def get_open_accounts(employee: str = None) -> pd.DataFrame:
         return pd.DataFrame(columns=["id_cuenta", "empleado", "carrito_json"])
     
     accounts = pd.DataFrame(records)
-    # Limpiamos los títulos de las columnas por si tienen espacios extra en Sheets
     accounts.columns = [str(c).strip().lower() for c in accounts.columns]
     
     if employee is not None and "empleado" in accounts.columns:
-        # Buscamos asegurando que no haya espacios invisibles que rompan la búsqueda
         accounts = accounts[accounts["empleado"].astype(str).str.strip() == str(employee).strip()].copy()
     return accounts
 
-def create_open_account(employee: str, cart: list) -> str:
+def create_open_account(employee: str, cart: list, nombre_cuenta: str = "Sin nombre") -> str:
     worksheet = get_worksheet("Cuentas_Abiertas")
     account_id = str(uuid.uuid4())
     cart_json = serialize_cart(cart)
     
-    # Leemos tus columnas en tiempo real y mapeamos los datos al lugar exacto
     headers = [str(h).strip().lower() for h in worksheet.row_values(1)]
     row_data = [""] * len(headers)
     
@@ -131,10 +129,10 @@ def create_open_account(employee: str, cart: list) -> str:
         if h == "id_cuenta": row_data[i] = account_id
         elif h == "empleado": row_data[i] = employee
         elif h == "carrito_json": row_data[i] = cart_json
-        elif h == "nombre_cuenta": row_data[i] = "Pedido en caja"
+        elif h == "nombre_cuenta": row_data[i] = nombre_cuenta
         
     if len(headers) == 0:
-        row_data = [account_id, employee, cart_json]
+        row_data = [account_id, nombre_cuenta, employee, cart_json]
         
     worksheet.append_row(row_data, value_input_option="RAW")
     return account_id
