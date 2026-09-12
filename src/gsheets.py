@@ -8,7 +8,6 @@ import gspread
 import pandas as pd
 import streamlit as st
 from google.oauth2.service_account import Credentials
-from sympy import python
 
 from src.config import TTL_CATALOGO
 
