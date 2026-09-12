@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from src.gsheets import (
-    append_rows, create_cash_closing, create_open_account, delete_open_account,
+    append_rows, create_open_account, delete_open_account,
     get_open_accounts, read_df, read_df_live, update_open_account, validate_employee_pin
 )
 
@@ -70,12 +70,8 @@ def _pantalla_bloqueo(empleados_df) -> None:
 def _panel_lateral(empleado: str) -> None:
     with st.sidebar:
         st.markdown(f"#### 👤 {empleado}")
-        col_salir, col_corte = st.columns(2)
-        if col_salir.button("🔒 Salir", use_container_width=True):
+        if st.button("🔒 Salir", use_container_width=True):
             st.session_state.pop("empleado_actual", None)
-            st.rerun()
-        if col_corte.button("🧮 Corte", use_container_width=True):
-            st.session_state["modo_corte_caja"] = True
             st.rerun()
 
         st.divider()
@@ -106,44 +102,6 @@ def _panel_lateral(empleado: str) -> None:
                     _reset_ticket(mesa)
                     st.rerun()
 
-def _pantalla_corte_caja(empleado: str) -> None:
-    st.markdown("### 🧮 Corte de caja (ciego)")
-    if st.button("‹ Volver al punto de venta"):
-        st.session_state["modo_corte_caja"] = False
-        st.rerun()
-
-    st.caption("Cuenta el efectivo físico del cajón ANTES de ver cuánto debería haber.")
-    fondo_inicial = st.number_input("Fondo inicial de caja", min_value=0.0, step=50.0, value=0.0)
-
-    with st.form("form_corte"):
-        contado = st.number_input("💵 Efectivo físico contado", min_value=0.0, step=10.0)
-        if st.form_submit_button("Confirmar conteo", type="primary", use_container_width=True):
-            ventas = read_df_live("Ventas")
-            esperado = fondo_inicial
-            if not ventas.empty and "monto_efectivo" in ventas.columns:
-                hoy_str = _ahora().strftime("%Y-%m-%d")
-                efectivo_col = pd.to_numeric(ventas["monto_efectivo"], errors="coerce").fillna(0)
-                hoy_mask = ventas["fecha"].astype(str).str.startswith(hoy_str)
-                esperado += float(efectivo_col.loc[hoy_mask].sum())
-
-            diferencia = round(contado - esperado, 2)
-            col_a, col_b = st.columns(2)
-            col_a.metric("Efectivo esperado", f"${esperado:,.2f}")
-            col_b.metric("Diferencia", f"${diferencia:,.2f}")
-
-            if diferencia == 0: st.success("Cuadra exacto. 🎉")
-            elif diferencia > 0: st.info("Sobra efectivo.")
-            else: st.warning("Falta efectivo.")
-
-            create_cash_closing(
-                empleado=empleado,
-                inicio_turno=_ahora().strftime("%Y-%m-%d 00:00:00"),
-                efectivo_inicial=fondo_inicial,
-                efectivo_reportado=contado,
-                efectivo_esperado=esperado,
-                fin_turno=_ahora().strftime("%Y-%m-%d %H:%M:%S")
-            )
-
 def render() -> None:
     empleados = read_df("Empleados")
     productos = read_df("Productos")
@@ -158,10 +116,6 @@ def render() -> None:
 
     empleado = st.session_state["empleado_actual"]
     _panel_lateral(empleado)
-
-    if st.session_state.get("modo_corte_caja"):
-        _pantalla_corte_caja(empleado)
-        return
 
     if "mensaje_flash" in st.session_state and st.session_state["mensaje_flash"]:
         st.success(st.session_state.pop("mensaje_flash"))
@@ -206,14 +160,31 @@ def render() -> None:
     mesa_actual = st.text_input("🪑 Mesa / cliente", key=f"mesa_input_{ticket_version}")
     telefono_cliente = st.text_input("📱 WhatsApp del cliente (opcional - solo para enviar ticket)", key=f"telefono_input_{ticket_version}")
 
-    pct_efectivo = st.slider("Efectivo", 0, 100, 100, format="%d%%")
-    efectivo = round(total * pct_efectivo / 100, 2)
-    resto = round(total - efectivo, 2)
-    tarjeta = round(resto * st.slider("Del resto, tarjeta", 0, 100, 100, format="%d%%") / 100, 2) if resto > 0 else 0.0
-    transferencia = round(resto - tarjeta, 2)
+    st.markdown("##### 💳 Método de pago")
+    metodos = ["Efectivo", "Tarjeta", "Transferencia", "Mixto"]
+    metodo = st.radio("Selecciona cómo pagan", metodos, horizontal=True, label_visibility="collapsed")
 
-    st.caption(f"Efectivo: ${efectivo:,.2f} | Tarjeta: ${tarjeta:,.2f} | Transf: ${transferencia:,.2f}")
-    metodo_pago_label = "Mixto" if sum(1 for m in [efectivo, tarjeta, transferencia] if m > 0) > 1 else ("Efectivo" if efectivo else "Tarjeta" if tarjeta else "Transferencia")
+    if metodo == "Efectivo":
+        efectivo, tarjeta, transferencia = total, 0.0, 0.0
+    elif metodo == "Tarjeta":
+        efectivo, tarjeta, transferencia = 0.0, total, 0.0
+    elif metodo == "Transferencia":
+        efectivo, tarjeta, transferencia = 0.0, 0.0, total
+    else:
+        st.caption("Escribe un monto y lo demás se calculará solo:")
+        efectivo_input = st.number_input("Monto en Efectivo ($)", min_value=0.0, value=0.0, step=50.0)
+        efectivo = min(efectivo_input, float(total))
+        
+        if efectivo_input > total:
+            st.info(f"🪙 Cambio a entregar: **${efectivo_input - total:,.2f}**")
+            
+        resto1 = round(total - efectivo, 2)
+        tarjeta_input = st.number_input("Monto en Tarjeta ($)", min_value=0.0, value=float(resto1), step=50.0)
+        tarjeta = min(tarjeta_input, resto1)
+        
+        transferencia = round(resto1 - tarjeta, 2)
+        if transferencia > 0:
+            st.caption(f"💡 El resto (${transferencia:,.2f}) se registra como Transferencia.")
 
     col_pausar, col_cobrar = st.columns(2)
     
@@ -239,7 +210,7 @@ def render() -> None:
             filas.append([
                 id_venta, ts.strftime("%Y-%m-%d %H:%M:%S"), empleado, linea["producto"], linea["cantidad"], 
                 round(linea["precio_unitario"], 2), round(linea["cantidad"] * linea["precio_unitario"], 2), 
-                metodo_pago_label, efectivo if idx == 0 else 0.0, tarjeta if idx == 0 else 0.0, 
+                metodo, efectivo if idx == 0 else 0.0, tarjeta if idx == 0 else 0.0, 
                 transferencia if idx == 0 else 0.0, tel_limpio
             ])
 
