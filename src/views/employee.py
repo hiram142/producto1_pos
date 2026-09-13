@@ -8,11 +8,12 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 
-from src.gsheets import (
-    create_open_account, delete_open_account,
-    get_open_accounts, read_df, update_open_account, validate_employee_pin
+from src.gsheets import read_df, validate_employee_pin
+from src.offline_queue import (
+    enqueue_sale, DB_PATH, init_queue, start_background_sync,
+    create_local_open_account, get_local_open_accounts,
+    update_local_open_account, delete_local_open_account,
 )
-from src.offline_queue import enqueue_sale, DB_PATH, init_queue, start_background_sync
 
 # --- INICIALIZADOR DE SINCRONIZACIÓN OFFLINE ---
 _SYNC_STARTED = False
@@ -119,35 +120,37 @@ def _panel_lateral(empleado: str) -> None:
 
         st.divider()
         st.markdown("#### ⏸️ Tus cuentas pendientes")
-        try:
-            cuentas_df = get_open_accounts(empleado)
-            if cuentas_df.empty:
-                st.caption("No tienes cuentas en pausa.")
-                return
 
-            for _, cuenta in cuentas_df.iterrows():
-                cuenta_id = cuenta.get("id_cuenta", "")
-                mesa = cuenta.get("nombre_cuenta", "Sin nombre")
-                try: carrito_guardado = json.loads(cuenta.get("carrito_json", "[]"))
-                except: carrito_guardado = []
+        todas_las_cuentas = get_local_open_accounts()
+        cuentas_empleado = [c for c in todas_las_cuentas if c.get("empleado") == empleado]
 
-                with st.container(border=True):
-                    st.write(f"**{mesa}**")
-                    n_items = sum(linea.get("cantidad", 0) for linea in carrito_guardado)
-                    st.caption(f"{n_items} artículos pendientes")
+        if not cuentas_empleado:
+            st.caption("No tienes cuentas en pausa.")
+            return
 
-                    if st.button("▶️ Retomar Pedido", key=f"retomar_{cuenta_id}", use_container_width=True):
-                        if "carrito" not in st.session_state: st.session_state["carrito"] = []
-                        st.session_state["carrito"] = list(carrito_guardado)
-                        st.session_state["cuenta_actual_id"] = cuenta_id
-                        _reset_ticket(mesa)
-                        st.rerun()
-        except Exception:
-            st.warning("Sin internet para ver cuentas pausadas.")
+        for cuenta in cuentas_empleado:
+            cuenta_id = cuenta.get("id")
+            mesa = cuenta.get("mesa", "Sin nombre")
+            try:
+                carrito_guardado = json.loads(cuenta.get("carrito_json", "[]"))
+            except Exception:
+                carrito_guardado = []
+
+            with st.container(border=True):
+                st.write(f"**{mesa}**")
+                n_items = sum(linea.get("cantidad", 0) for linea in carrito_guardado)
+                st.caption(f"{n_items} artículos pendientes")
+
+                if st.button("▶️ Retomar Pedido", key=f"retomar_{cuenta_id}", use_container_width=True):
+                    if "carrito" not in st.session_state: st.session_state["carrito"] = []
+                    st.session_state["carrito"] = list(carrito_guardado)
+                    st.session_state["cuenta_actual_id"] = cuenta_id
+                    _reset_ticket(mesa)
+                    st.rerun()
 
 def render() -> None:
     iniciar_sincronizador()
-    
+
     try:
         empleados = read_df("Empleados")
         productos = read_df("Productos")
@@ -236,16 +239,23 @@ def render() -> None:
     if col_pausar.button("📥 Pausar", use_container_width=True):
         cuenta_id = st.session_state.get("cuenta_actual_id")
         nombre_final = mesa_actual.strip() or f"Mesa de {empleado}"
+        carrito_json = json.dumps(carrito)
+
         try:
-            if cuenta_id: update_open_account(cuenta_id, list(carrito))
-            else: create_open_account(empleado, list(carrito), nombre_final)
-            st.session_state["carrito"] = []
-            st.session_state.pop("cuenta_actual_id", None)
-            st.session_state["mensaje_flash"] = f"Pedido '{nombre_final}' pausado."
-            _reset_ticket()
-            st.rerun()
-        except Exception:
-            st.error("🔌 Necesitas internet para pausar mesas. Cobra el ticket o elimina los productos.")
+            if cuenta_id:
+                update_local_open_account(cuenta_id, nombre_final, empleado, carrito_json)
+            else:
+                create_local_open_account(nombre_final, empleado, carrito_json)
+        except Exception as exc:
+            st.error("No se pudo guardar el pedido en pausa localmente.")
+            st.code(str(exc), language="text")
+            return
+
+        st.session_state["carrito"] = []
+        st.session_state.pop("cuenta_actual_id", None)
+        st.session_state["mensaje_flash"] = f"Pedido '{nombre_final}' pausado."
+        _reset_ticket()
+        st.rerun()
 
     if col_cobrar.button("💵 Cobrar y Cerrar", type="primary", use_container_width=True):
         venta_en_curso = st.session_state.get("venta_en_curso")
@@ -257,7 +267,7 @@ def render() -> None:
                 "carrito": list(carrito),
             }
             st.session_state["venta_en_curso"] = venta_en_curso
-        
+
         id_venta, ts = venta_en_curso["id_venta"], venta_en_curso["ts"]
         tel_limpio = "".join(filter(str.isdigit, telefono_cliente))
 
@@ -271,10 +281,9 @@ def render() -> None:
             ])
 
         try:
-            # Aquí llamamos a la función con el orden correcto de parámetros que exige Lumina
             enqueue_sale(filas=filas, id_venta=id_venta, created_at=ts.strftime("%Y-%m-%d %H:%M:%S"))
         except sqlite3.IntegrityError:
-            pass # Si hace doble clic, no pasa nada
+            pass  
         except Exception as exc:
             st.error("No se pudo guardar la venta en la caja. El carrito sigue intacto, intenta de nuevo.")
             st.code(str(exc), language="text")
@@ -282,11 +291,12 @@ def render() -> None:
 
         st.session_state.pop("venta_en_curso", None)
         cuenta_id = st.session_state.get("cuenta_actual_id")
-        
-        try:
-            if cuenta_id: delete_open_account(cuenta_id)
-        except Exception:
-            pass # Si falla borrar la mesa pausada por falta de red, lo ignoramos para no asustar al cajero
+
+        if cuenta_id:
+            try:
+                delete_local_open_account(cuenta_id)
+            except Exception:
+                pass  
 
         st.success(f"Venta {id_venta} cobrada.", icon="✅")
         st.balloons()
